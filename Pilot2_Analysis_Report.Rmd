@@ -1,0 +1,501 @@
+---
+title: "Pilot2_Analysis_Report"
+author: "Stephanie Bugler"
+date: "2025-07-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+#Set working directory for the entire file
+knitr::opts_knit$set(root.dir = "/Users/stephaniebugler/Documents/Masters/Masters Thesis/R/Pilot_2/Data")
+
+```
+
+# Install Packages
+
+```{r setup_packages, message=FALSE, warning=FALSE}
+if (!require("pacman")) install.packages("pacman", repos = "https://cloud.r-project.org")
+pacman::p_load(
+  tidyverse,
+  jsonlite,
+  ggpubr,
+  psych
+)
+```
+
+# Load Libraries
+
+```{r}
+library(tidyverse)  
+library(jsonlite)
+library(ggpubr)
+library(pacman)
+library(psych)
+```
+
+# Load & Prep Data
+
+```{r}
+
+# Read the file line-by-line and parse each JSON row into a data frame
+dat <- suppressMessages(
+  read_file("Pilot2_data.txt") %>%
+    str_split("\n") %>%
+    first() %>%
+    discard(~ .x == "" || .x == "\r") %>%
+    map_dfr(fromJSON, flatten = TRUE)
+)
+
+# Assign unique ID to each participant
+dat$ID <- NA
+tmp_IDcounter <- 0
+for (i in 1:nrow(dat)) {
+  if (!is.na(dat$sender[i]) && dat$sender[i] == "Greetings") {
+    tmp_IDcounter <- tmp_IDcounter + 1
+  }
+  dat$ID[i] <- tmp_IDcounter
+}
+rm(tmp_IDcounter)
+
+```
+
+# Score Calculations
+
+```{r}
+
+### ─────────────────────────────────────────────
+### Calculate mean scores for Ecological Dimension
+### ─────────────────────────────────────────────
+# 1. Filter and select relevant columns
+eco <- dat %>%
+  filter(sender == "Ecological Dimension Scale") %>%
+  select(ID, framingCondition, starts_with("EcologicalDimension"))
+
+# 2. Convert char to numeric
+eco[ , 3:ncol(eco)] <- lapply(eco[ , 3:ncol(eco)], function(x) as.numeric(trimws(x)))
+
+# 3. Compute participant-level mean score
+eco_scores <- eco
+eco_scores$eco_mean <- rowMeans(eco_scores[, grep("EcologicalDimension", names(eco_scores))], na.rm = TRUE)
+eco_scores <- eco_scores[, c("ID", "framingCondition", "eco_mean")]
+```
+
+```{r}
+### ─────────────────────────────────────────────
+### Bioinspiration scale: Reverse Coding + Mean Scores
+### ─────────────────────────────────────────────
+
+# 1. Extract raw Bioinspiration item responses
+bio_items_raw <- dat %>%
+  filter(sender == "Bioinspiration Scale") %>%
+  select(ID, starts_with("Bioinspiration"))
+
+# 2. Convert ALL columns except ID to numeric
+bio_items_raw[ , 2:ncol(bio_items_raw)] <- lapply(bio_items_raw[ , 2:ncol(bio_items_raw)], function(x) as.numeric(trimws(x)))
+
+# 3. Compute participant-level mean BEFORE reverse coding
+bio_mean_before <- rowMeans(bio_items_raw[, -1], na.rm = TRUE)
+overall_mean_before <- mean(bio_mean_before, na.rm = TRUE)
+
+# 4. Reverse-code the 3 negatively worded items — FIXED to preserve ID
+bio_items_clean <- dat %>%
+  filter(sender == "Bioinspiration Scale") %>%
+  select(ID, starts_with("Bioinspiration")) %>%
+  mutate(
+    across(starts_with("Bioinspiration"), ~ as.numeric(trimws(as.character(.)))),
+    `Bioinspiration-IPI2r`  = 6 - `Bioinspiration-IPI2r`,
+    `Bioinspiration-PN2r`   = 6 - `Bioinspiration-PN2r`,
+    `Bioinspiration-VRtN4r` = 6 - `Bioinspiration-VRtN4r`
+  )
+
+
+# 5. Compute participant-level mean AFTER reverse coding
+bio_mean_after <- rowMeans(bio_items_clean[, -1], na.rm = TRUE)
+overall_mean_after <- mean(bio_mean_after, na.rm = TRUE)
+
+# 5b. Assemble cleaned scores table
+bio_scores <- bio_items_clean %>%
+  mutate(bio_mean = bio_mean_after) %>%
+  select(ID, bio_mean)
+
+
+# 6. Print summary
+cat("Average mean BEFORE reverse coding:", round(overall_mean_before, 3), "\n")
+cat("Average mean AFTER reverse coding:", round(overall_mean_after, 3), "\n")
+
+
+```
+
+# Create table to compare framing conditions
+
+```{r}
+
+### ─────────────────────────────────────────────
+### created framing info table
+### ─────────────────────────────────────────────
+# Extract from 'InformedConsent' page
+frame_info <- dat %>%
+  filter(sender == "InformedConsent") %>%
+  select(ID, framingCondition)
+
+# Merge true condition into score tables
+eco_scores <- left_join(eco_scores, frame_info, by = "ID") %>%
+  select(-framingCondition.x) %>%
+  dplyr::rename(framingCondition = framingCondition.y)
+
+bio_scores <- left_join(bio_scores, frame_info, by = "ID")
+
+
+```
+
+# 
+
+# Summary & Plots
+
+```{r}
+
+#number of pps in each framing condition
+table(eco_scores$framingCondition, useNA = "always")
+```
+
+```{r}
+
+library(plyr)
+
+# Summary function
+data_summary <- function(data, varname, groupnames){
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm = TRUE),
+      se = sd(x[[col]], na.rm = TRUE) / sqrt(length(na.omit(x[[col]]))))
+  }
+  data_sum <- ddply(data, groupnames, .fun = summary_func, varname)
+  data_sum <- plyr::rename(data_sum, c("mean" = varname))
+  return(data_sum)
+}
+
+# Summaries of participant-level scores by framing condition
+eco_summary <- data_summary(eco_scores, "eco_mean", "framingCondition")
+bio_summary <- data_summary(bio_scores, "bio_mean", "framingCondition")
+
+# View results
+print(eco_summary)
+print(bio_summary)
+```
+
+# Interpretation of summary stats:
+
+-   Sustainable framing leads to the highest ecological scores on average.
+
+-   Sustainable framing produces the lowest bioinspiration scores.
+
+-   Bioinspired framing leads to the highest bioinspiration scores.
+
+-   Bioinspired framing results in the lowest ecological scores.
+
+```{r}
+# Plots the mean scores on the Bioinspiration & Ecological Dimension by Framing Condition
+ggplot(eco_scores, aes(x = framingCondition, y = eco_mean)) +
+  geom_boxplot(fill = "lightgreen") +
+  labs(title = "Ecological Dimension by Framing", y = "Mean Score") +
+  theme_minimal()
+
+ggplot(bio_scores, aes(x = framingCondition, y = bio_mean)) +
+  geom_boxplot(fill = "skyblue") +
+  labs(title = "Bioinspiration by Framing", y = "Mean Score") +
+  theme_minimal()
+```
+
+## Some more plots...
+
+```{r}
+
+# Violin plot for Ecological Dimension
+ggplot(eco_scores, aes(x = framingCondition, y = eco_mean)) +
+  geom_violin(fill = "palegreen", alpha = 0.5, trim = FALSE) +
+  geom_jitter(width = 0.15, alpha = 0.4, color = "darkgreen") +
+  stat_summary(fun = mean, geom = "point", color = "black", size = 3) +
+  labs(title = "Ecological Scores by Framing", y = "Mean Score", x = "Framing Condition") +
+  theme_minimal()
+
+# Violin plot for Bioinspiration
+ggplot(bio_scores, aes(x = framingCondition, y = bio_mean)) +
+  geom_violin(fill = "lightblue", alpha = 0.5, trim = FALSE) +
+  geom_jitter(width = 0.15, alpha = 0.4, color = "darkblue") +
+  stat_summary(fun = mean, geom = "point", color = "black", size = 3) +
+  labs(title = "Bioinspiration Scores by Framing", y = "Mean Score", x = "Framing Condition") +
+  theme_minimal()
+```
+
+# Test For Spillover Effects
+
+### i.e., Did exposure to the bioinspired vignettes results in pps. rating the tech as more sustainable? and vice versa.
+
+For the Ecological Items/Sustainability Scale:
+
+```{r}
+# 1. Join pps bio inspiration and sustainability scores into one data frame
+combined_scores <- left_join(bio_scores, eco_scores, by = c("ID", "framingCondition"))
+
+#2. Run ANOVAs for spillover effects
+#2a. Does framing affect Sustainability Scores?
+eco_spillover <- aov(eco_mean ~ framingCondition, data = combined_scores)
+summary(eco_spillover)
+# 2a.2. Post-hoc comparision
+TukeyHSD(eco_spillover)
+```
+
+Visualise the results for the Ecological Items/Sustainability Scale:
+
+```{r}
+#Visualise Framing effect on ecological scores
+ggplot(combined_scores, aes(x = framingCondition, y = eco_mean, fill = framingCondition)) +
+  geom_boxplot() +
+  labs(title = "Spillover: Framing Effect on Ecological Scores",
+       y = "Ecological Mean Score", x = "Framing Condition") +
+  theme_minimal()
+```
+
+------------------------------------------------------------------------
+
+For the Bioinspiration Scale:
+
+```{r}
+
+# Does framing affect bioinspiration scores?”
+# post-hoc Tukey
+bio_spillover <- aov(bio_mean ~ framingCondition, data = combined_scores)
+summary(bio_spillover)
+TukeyHSD(bio_spillover)
+```
+
+Visualise the results for the Bioinspiration Scale:
+
+```{r}
+
+#Visualise Framing effect on bioinpspiration scores
+ggplot(combined_scores, aes(x = framingCondition, y = bio_mean, fill = framingCondition)) +
+  geom_boxplot() +
+  labs(title = "Spillover: Framing Effect on Bioinspiration Scores",
+       y = "Bioinspiration Mean Score", x = "Framing Condition") +
+  theme_minimal()
+
+```
+
+# Interpretation:
+
+-   Sustainable vignettes significantly boosted sustainability attitudes (suggests the vignettes are working), but interestingly, bioinspired framing scored lowest on this scale.
+
+-   This shows strong domain specificity — and possibly a negative spillover??
+
+-   Bioinspired vignettes significantly increased bioinspiration scale scores i.e., the vignettes are working.
+
+-   But again, sustainable framing actually reduced bioinspiration, suggesting minimal or even negative spillover in the other direction.
+
+------------------------------------------------------------------------
+
+## Everything below this point is broken
+
+# Performance of Individual Scale Items
+
+## Bioinspiration Scale
+
+```{r}
+# remove this awful package
+remove.packages("plyr")
+```
+
+```{r}
+
+ ### ─────────────────────────────────────────────
+### Individual Item Analysis: Bioinspiration (Reversed) & Ecological Scales
+### ─────────────────────────────────────────────
+
+# 1. Convert cleaned + reverse-coded Bioinspiration data to long format
+# Make sure the columns exist and are not dropped by mistake
+bio_long <- bio_items_clean %>%
+  pivot_longer(
+    cols = starts_with("Bioinspiration"),
+    names_to = "item",
+    values_to = "score"
+  ) %>%
+  left_join(frame_info, by = "ID") %>%
+  select(ID, item, score, framingCondition)  # <-- This is "immediately after your join"
+
+
+# Check that items are back
+glimpse(bio_long)
+```
+
+```{r}
+bio_long %>% dplyr::count(.data$item, .data$framingCondition)
+
+```
+
+```{r}
+# 4. Summarise by individual Bioinspiration item & framing condition
+
+
+# bio_item_summary <- bio_long %>%
+  #group_by(item, framingCondition) %>%
+  #summarise(
+    #mean = mean(score, na.rm = TRUE),
+    #sd   = sd(score, na.rm = TRUE),
+    #n    = sum(!is.na(score)),
+    #se   = sd / sqrt(n),
+    #.groups = "drop"
+  #)
+
+#glimpse(bio_item_summary)
+
+```
+
+```{r}
+#  Convert Ecological Dimension data (cleaned) to long format
+eco_joined <- eco %>%
+  pivot_longer(
+    cols = starts_with("EcologicalDimension"),
+    names_to = "item",
+    values_to = "score"
+  ) %>%
+  left_join(frame_info, by = "ID")
+
+eco_long <- eco_joined %>%
+  select(ID, item, score, framingCondition = framingCondition.y)
+
+
+
+# Summarise by individual Ecological item & framing condition
+eco_item_summary <- eco_long %>%
+  group_by(item, framingCondition) %>%
+  summarise(
+    mean = mean(score, na.rm = TRUE),
+    sd   = sd(score, na.rm = TRUE),
+    n    = sum(!is.na(score)),
+    se   = sd / sqrt(n),
+    .groups = "drop"
+  )
+
+```
+
+### Plot the Bioinspiration Scores by Individual Item
+
+```{r}
+# 3a. Plot Bioinspiration Scale items by framing
+
+# First, reorder the items in a separate step
+#bio_item_summary <- bio_item_summary %>%
+  #mutate(item = fct_reorder(item, mean))
+
+# Then plot
+#ggplot(bio_item_summary, aes(x = item, y = mean, fill = framingCondition)) +
+  #geom_col(position = position_dodge(width = 0.8)) +
+  #geom_errorbar(aes(ymin = mean - se, ymax = mean + se),
+                #width = 0.2, position = position_dodge(width = 0.8)) +
+  #coord_flip() +
+  #labs(
+    #title = "Bioinspiration Items by Framing Condition",
+    #x = "Item",
+    #y = "Mean Score (1–5)"
+  #) +
+  #theme_minimal() +
+  #theme(legend.position = "top")
+
+
+```
+
+# Ecological Dimension Scale
+
+```{r}
+
+# Create clean frame_info first (1 row per participant)
+frame_info <- dat %>%
+  filter(sender == "InformedConsent") %>%
+  select(ID, framingCondition) %>%
+  distinct()
+
+# Now join to eco_long
+eco_long <- eco %>%
+  pivot_longer(
+    cols = starts_with("EcologicalDimension"),
+    names_to = "item",
+    values_to = "score"
+  ) %>%
+  left_join(frame_info, by = "ID")
+
+# Remove any existing 'framingCondition.x' and rename 'framingCondition.y'
+eco_long <- eco_long %>%
+  select(-framingCondition.x) %>%
+  dplyr::rename(framingCondition = framingCondition.y)
+
+
+# summarise eco items
+eco_item_summary <- eco_long %>%
+  group_by(item, framingCondition) %>%
+  dplyr::summarise(
+    mean = mean(score, na.rm = TRUE),
+    sd = sd(score, na.rm = TRUE),
+    n = sum(!is.na(score)),
+    se = sd / sqrt(n),
+    .groups = "drop"
+  )
+
+```
+
+## Plot the Ecological Scale Items
+
+```{r}
+
+#visualise eco items
+ggplot(eco_item_summary, aes(x = reorder(item, -mean), y = mean, fill = framingCondition)) +
+  geom_col(position = position_dodge(width = 0.8)) +
+  geom_errorbar(aes(ymin = mean - se, ymax = mean + se),
+                width = 0.2, position = position_dodge(width = 0.8)) +
+  coord_flip() +
+  labs(
+    title = "Ecological Scale Items by Framing Condition",
+    x = "Item", y = "Mean Score (1–7)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+------------------------------------------------------------------------
+
+# Scale Purification for Bioinspiration Items
+
+We want to find out which items performed well and which we can throw out.
+
+### Run Cronbach's Alpha
+
+```{r}
+
+### ─────────────────────────────────────────────
+### Bioinspiration Scale – Test for Internal Consistency
+### ─────────────────────────────────────────────
+
+# Load necessary libraries
+library(dplyr)
+library(psych)
+
+
+# 1. Extract and clean Bioinspiration item responses
+#bio_items_clean <- dat %>%
+  #filter(sender == "Bioinspiration Scale") %>%
+  #select(starts_with("Bioinspiration")) %>%
+  #mutate(across(everything(), ~ as.numeric(trimws(as.character(.)))))  # Ensure numeric
+
+# 2. Optional: unload plyr if loaded, to avoid conflicts
+if ("package:plyr" %in% search()) {
+  detach("package:plyr", unload = TRUE, character.only = TRUE)
+}
+
+# 3. Run Cronbach's alpha
+bio_alpha <- alpha(bio_items_clean, check.keys = TRUE)  # Enables automatic detection of miskeyed items
+
+# 4. Print results
+cat("Cronbach's Alpha (raw):", round(bio_alpha$total$raw_alpha, 3), "\n\n")
+print(bio_alpha$item.stats)
+
+```
+
+## 
